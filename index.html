@@ -825,7 +825,72 @@ async function fetchAircraft() {
   }
 }
 
-// ─── Military detection ───────────────────────────────────────────────────────
+// ─── ICAO type code → readable name lookup ────────────────────────────────────
+// Covers the most common types seen in UK/European airspace.
+// Falls back gracefully to just showing the raw type code if not found.
+const ICAO_TYPE_NAMES = {
+  // Boeing narrowbody
+  'B737':'Boeing 737', 'B738':'Boeing 737-800', 'B739':'Boeing 737-900',
+  'B38M':'Boeing 737 MAX 8', 'B39M':'Boeing 737 MAX 9',
+  'B752':'Boeing 757-200', 'B753':'Boeing 757-300',
+  'B762':'Boeing 767-200', 'B763':'Boeing 767-300', 'B764':'Boeing 767-400',
+  // Boeing widebody
+  'B772':'Boeing 777-200', 'B77W':'Boeing 777-300ER', 'B778':'Boeing 777X-8', 'B779':'Boeing 777X-9',
+  'B788':'Boeing 787-8', 'B789':'Boeing 787-9', 'B78X':'Boeing 787-10',
+  'B741':'Boeing 747-100', 'B742':'Boeing 747-200', 'B743':'Boeing 747-300',
+  'B744':'Boeing 747-400', 'B748':'Boeing 747-8',
+  // Airbus narrowbody
+  'A318':'Airbus A318', 'A319':'Airbus A319', 'A320':'Airbus A320',
+  'A321':'Airbus A321', 'A20N':'Airbus A320neo', 'A21N':'Airbus A321neo',
+  // Airbus widebody
+  'A332':'Airbus A330-200', 'A333':'Airbus A330-300',
+  'A338':'Airbus A330-800neo', 'A339':'Airbus A330-900neo',
+  'A342':'Airbus A340-200', 'A343':'Airbus A340-300',
+  'A345':'Airbus A340-500', 'A346':'Airbus A340-600',
+  'A359':'Airbus A350-900', 'A35K':'Airbus A350-1000',
+  'A380':'Airbus A380', 'A388':'Airbus A380-800',
+  // Embraer
+  'E170':'Embraer E170', 'E175':'Embraer E175',
+  'E190':'Embraer E190', 'E195':'Embraer E195',
+  'E290':'Embraer E190-E2', 'E295':'Embraer E195-E2',
+  'E135':'Embraer ERJ-135', 'E145':'Embraer ERJ-145',
+  // ATR
+  'AT43':'ATR 42-300', 'AT45':'ATR 42-500', 'AT46':'ATR 42-600',
+  'AT72':'ATR 72-200', 'AT73':'ATR 72-500', 'AT75':'ATR 72-500', 'AT76':'ATR 72-600',
+  // Bombardier
+  'DH8A':'Dash 8-100', 'DH8B':'Dash 8-200', 'DH8C':'Dash 8-300', 'DH8D':'Dash 8-400',
+  'CRJ1':'Bombardier CRJ-100', 'CRJ2':'Bombardier CRJ-200',
+  'CRJ7':'Bombardier CRJ-700', 'CRJ9':'Bombardier CRJ-900', 'CRJX':'Bombardier CRJ-1000',
+  'C130':'Lockheed C-130 Hercules',
+  // Business jets
+  'C25A':'Cessna Citation CJ2', 'C25B':'Cessna Citation CJ3', 'C25C':'Cessna Citation CJ4',
+  'C510':'Cessna Citation Mustang', 'C550':'Cessna Citation II', 'C560':'Cessna Citation V',
+  'C680':'Cessna Citation Sovereign', 'C750':'Cessna Citation X',
+  'GL5T':'Bombardier Global 5000', 'GLEX':'Bombardier Global Express',
+  'GL7T':'Bombardier Global 7500',
+  'F2TH':'Dassault Falcon 2000', 'F900':'Dassault Falcon 900', 'F7X':'Dassault Falcon 7X',
+  'GALX':'Gulfstream G200', 'G280':'Gulfstream G280',
+  'G550':'Gulfstream G550', 'G650':'Gulfstream G650',
+  // Helicopters
+  'EC35':'Airbus H135', 'EC45':'Airbus H145', 'EC55':'Airbus H155',
+  'AS65':'Airbus AS365 Dauphin', 'H60':'Sikorsky S-70 / UH-60',
+  'S92':'Sikorsky S-92', 'AW13':'Leonardo AW139',
+  // Military
+  'E3CF':'Boeing E-3 Sentry', 'A400':'Airbus A400M Atlas',
+  'EUFI':'Eurofighter Typhoon', 'F16':'General Dynamics F-16',
+  'F35':'Lockheed Martin F-35', 'ASTR':'BAE Systems Astute / Patrol',
+  'P8':'Boeing P-8 Poseidon', 'RC35':'Raytheon Sentinel R1',
+  'VCIO':'Vickers VC10', 'A109':'Agusta A109',
+  // Misc
+  'PC12':'Pilatus PC-12', 'TBM9':'Daher TBM 930',
+  'SR22':'Cirrus SR22', 'PA28':'Piper Cherokee',
+  'C172':'Cessna 172', 'C182':'Cessna 182',
+};
+
+function typeToName(code) {
+  if (!code) return null;
+  return ICAO_TYPE_NAMES[code.toUpperCase()] || null;
+}
 // ADSBexchange sets dbFlags bit 1 for military.
 // As a belt-and-braces fallback, also check squawk 7777 (mil intercept)
 // and common UK/NATO military ICAO hex prefixes.
@@ -953,7 +1018,7 @@ function renderDetail(ac) {
   const callsign = (ac.flight || ac.hex || '????').trim();
   const reg     = ac.r    || '—';
   const type    = ac.t    || '—';
-  const desc    = ac.desc || '—';
+  const name    = typeToName(ac.t) || '—';
   const alt     = typeof ac.alt_baro === 'number' ? `FL${Math.round(ac.alt_baro/100).toString().padStart(3,'0')} (${ac.alt_baro.toLocaleString()}ft)` : 'On ground';
   const spd     = ac.gs        ? `${Math.round(ac.gs)} kt`                        : '—';
   const hdg     = ac.track     ? `${Math.round(ac.track)}°`                       : '—';
@@ -967,7 +1032,7 @@ function renderDetail(ac) {
     <div class="dp-title">${callsign}${milFlag}</div>
     <div class="dp-row"><span>Registration</span><span>${reg}</span></div>
     <div class="dp-row"><span>ICAO type</span><span>${type}</span></div>
-    <div class="dp-row" title="${desc}" style="cursor:default"><span>Aircraft</span><span style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${desc}">${desc}</span></div>
+    <div class="dp-row"><span>Aircraft</span><span style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${name}">${name}</span></div>
     <div class="dp-row"><span>Altitude</span><span>${alt}</span></div>
     <div class="dp-row"><span>Speed</span><span>${spd}</span></div>
     <div class="dp-row"><span>Heading</span><span>${hdg}</span></div>
@@ -981,15 +1046,15 @@ function renderDetail(ac) {
 // ─── Demo mode ────────────────────────────────────────────────────────────────
 function injectDemoData() {
   const seed = [
-    { hex:'400615', flight:'BAW123 ', alt_baro:32000, gs:480, track:220, squawk:'1234', t:'B77W', r:'G-STBA', desc:'Boeing 777-300ER',         dbFlags:0 },
-    { hex:'4007f1', flight:'EZY55KL', alt_baro:28000, gs:420, track:135, squawk:'2341', t:'A320', r:'G-EZWA', desc:'Airbus A320-214',           dbFlags:0 },
-    { hex:'4ca7b3', flight:'RYR7KQ ', alt_baro:15000, gs:380, track: 60, squawk:'3412', t:'B738', r:'EI-DCL', desc:'Boeing 737-800',            dbFlags:0 },
-    { hex:'3c4b27', flight:'DLH44B ', alt_baro:41000, gs:510, track:290, squawk:'4123', t:'A359', r:'D-AIVB', desc:'Airbus A350-900',           dbFlags:0 },
-    { hex:'4b1a20', flight:'KLM302 ', alt_baro: 8000, gs:290, track:350, squawk:'1432', t:'E190', r:'PH-EZA', desc:'Embraer ERJ-190',           dbFlags:0 },
-    { hex:'407c88', flight:'IBE21AH', alt_baro:37000, gs:490, track:185, squawk:'2143', t:'A333', r:'EC-LZX', desc:'Airbus A330-300',           dbFlags:0 },
-    { hex:'4cad20', flight:'AER831 ', alt_baro: 3500, gs:210, track: 95, squawk:'3214', t:'AT75', r:'EI-REL', desc:'ATR 72-500',                dbFlags:0 },
-    { hex:'43c3b1', flight:'RRR6872', alt_baro:22000, gs:330, track:310, squawk:'7004', t:'ASTR', r:'ZZ416',  desc:'Astute-class Patrol',       dbFlags:1 },
-    { hex:'43e14a', flight:'NATO01 ', alt_baro: 5000, gs:280, track: 40, squawk:'7777', t:'E3CF', r:'ZH103',  desc:'Boeing E-3D Sentry AEW.1', dbFlags:1 },
+    { hex:'400615', flight:'BAW123 ', alt_baro:32000, gs:480, track:220, squawk:'1234', t:'B77W', r:'G-STBA', dbFlags:0 },
+    { hex:'4007f1', flight:'EZY55KL', alt_baro:28000, gs:420, track:135, squawk:'2341', t:'A320', r:'G-EZWA', dbFlags:0 },
+    { hex:'4ca7b3', flight:'RYR7KQ ', alt_baro:15000, gs:380, track: 60, squawk:'3412', t:'B738', r:'EI-DCL', dbFlags:0 },
+    { hex:'3c4b27', flight:'DLH44B ', alt_baro:41000, gs:510, track:290, squawk:'4123', t:'A359', r:'D-AIVB', dbFlags:0 },
+    { hex:'4b1a20', flight:'KLM302 ', alt_baro: 8000, gs:290, track:350, squawk:'1432', t:'E190', r:'PH-EZA', dbFlags:0 },
+    { hex:'407c88', flight:'IBE21AH', alt_baro:37000, gs:490, track:185, squawk:'2143', t:'A333', r:'EC-LZX', dbFlags:0 },
+    { hex:'4cad20', flight:'AER831 ', alt_baro: 3500, gs:210, track: 95, squawk:'3214', t:'AT75', r:'EI-REL', dbFlags:0 },
+    { hex:'43c3b1', flight:'RRR6872', alt_baro:22000, gs:330, track:310, squawk:'7004', t:'ASTR', r:'ZZ416',  dbFlags:1 },
+    { hex:'43e14a', flight:'NATO01 ', alt_baro: 5000, gs:280, track: 40, squawk:'7777', t:'E3CF', r:'ZH103',  dbFlags:1 },
   ];
   // Drift positions slowly over time
   const t = Date.now() / 1000;
