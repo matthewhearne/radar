@@ -131,6 +131,81 @@
   }
   .ctrl-val { color: var(--green); min-width: 36px; text-align: right; font-size: 11px; }
 
+  /* ── Toggle switches ── */
+  .ctrl-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-dim);
+    padding: 1px 0;
+  }
+  .toggle-wrap { display: flex; align-items: center; gap: 6px; }
+  .toggle {
+    position: relative; width: 32px; height: 17px;
+    display: inline-block; flex-shrink: 0;
+  }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle-track {
+    position: absolute; inset: 0;
+    background: #0a2a18;
+    border: 1px solid var(--green-dim);
+    border-radius: 17px;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .toggle-track::after {
+    content: '';
+    position: absolute;
+    width: 11px; height: 11px;
+    left: 2px; top: 2px;
+    background: var(--green-dim);
+    border-radius: 50%;
+    transition: transform 0.2s, background 0.2s;
+  }
+  .toggle input:checked + .toggle-track { background: #0a4028; border-color: var(--green); }
+  .toggle input:checked + .toggle-track::after { transform: translateX(15px); background: var(--green); }
+  .toggle-label { color: var(--text-dim); font-size: 11px; }
+  .toggle-label.active { color: var(--green); }
+
+  /* ── Military aircraft styling ── */
+  .ac-item.military .callsign { color: var(--amber); }
+  .ac-item.military { border-left: 2px solid #7a4a00; }
+  .ac-item.military.selected { border-left: 2px solid var(--amber); background: rgba(255,179,71,0.08); }
+  .mil-badge {
+    display: inline-block;
+    font-size: 9px;
+    color: var(--amber);
+    border: 1px solid #7a4a00;
+    padding: 0 3px;
+    margin-left: 4px;
+    vertical-align: middle;
+    letter-spacing: 0.05em;
+  }
+
+  /* ── New contact pulse animation ── */
+  @keyframes newContact {
+    0%   { background: rgba(0,255,136,0.35); box-shadow: inset 0 0 8px rgba(0,255,136,0.5); }
+    40%  { background: rgba(0,255,136,0.15); }
+    70%  { background: rgba(0,255,136,0.08); }
+    100% { background: transparent; box-shadow: none; }
+  }
+  .ac-item.new-contact { animation: newContact 2.5s ease-out forwards; }
+  .ac-item.new-contact .callsign { color: #ffffff; }
+
+  /* ── Audio indicator in sidebar header ── */
+  #audio-badge {
+    font-size: 10px;
+    color: var(--text-dim);
+    border: 1px solid var(--green-dim);
+    padding: 1px 5px;
+    cursor: pointer;
+    transition: all 0.15s;
+    user-select: none;
+  }
+  #audio-badge:hover { border-color: var(--green); color: var(--green); }
+  #audio-badge.on { color: var(--green); border-color: var(--green); }
+
   #ac-list {
     flex: 1;
     overflow-y: auto;
@@ -272,7 +347,10 @@
   <aside id="sidebar">
     <div id="sidebar-header">
       <span id="ac-count">0 aircraft</span>
-      <button id="cfg-btn">⚙ CONFIG</button>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <span id="audio-badge" title="Toggle audio alert for new contacts">♪ OFF</span>
+        <button id="cfg-btn">⚙ CONFIG</button>
+      </div>
     </div>
     <div id="controls">
       <div class="ctrl-row">
@@ -284,6 +362,13 @@
         <label>Min altitude</label>
         <input type="range" id="alt-slider" min="0" max="45000" step="1000" value="0">
         <span class="ctrl-val" id="alt-val">ALL</span>
+      </div>
+      <div class="ctrl-toggle">
+        <span>Military only</span>
+        <label class="toggle">
+          <input type="checkbox" id="mil-toggle">
+          <span class="toggle-track"></span>
+        </label>
       </div>
     </div>
     <div id="ac-list"></div>
@@ -341,6 +426,8 @@ const STATE = {
   pollMs:      5000,
   radiusNm:    100,
   minAlt:      0,
+  milOnly:     false,
+  audioOn:     false,
   aircraft:    [],
   selected:    null,
   sweepAngle:  0,
@@ -349,12 +436,14 @@ const STATE = {
   statusClass: 'status-warn',
   errorCount:  0,
   demoMode:    false,
-  // phosphor trail: stores {x,y,age} per pixel quadrant
   trail:       new Map(),
   pollTimer:   null,
-  // GeoJSON coastline features once loaded
   coastFeatures: null,
   coastLoading:  false,
+  // Tracks hex codes seen in previous poll to detect new contacts
+  knownHexes:  new Set(),
+  // Hex codes that are new this cycle (cleared after render)
+  newContacts: new Set(),
 };
 
 // ─── Canvas setup ─────────────────────────────────────────────────────────────
@@ -625,12 +714,14 @@ function drawAircraft() {
   // Only draw aircraft within the radar circle and above minAlt
   STATE.aircraft.forEach(ac => {
     if (ac._distNm > STATE.radiusNm) return;
+    if (STATE.milOnly && !ac._military) return;
     const alt = (typeof ac.alt_baro === 'number') ? ac.alt_baro : null;
     if (alt !== null && alt < STATE.minAlt) return;
 
     const { x, y } = polarToXY(ac._bearing, ac._distNm);
-    const col  = altColour(alt);
-    const sel  = STATE.selected === ac.hex;
+    const isMil = ac._military;
+    const col   = isMil ? '#ffb347' : altColour(alt);
+    const sel   = STATE.selected === ac.hex;
     const size = sel ? 8 : 6;
     // Rotate heading chevron by the same view rotation so it points correctly
     const track = ((ac.track || 0) + ROTATION_DEG) * Math.PI / 180;
@@ -747,19 +838,88 @@ async function fetchAircraft() {
   }
 }
 
+// ─── Audio ping ───────────────────────────────────────────────────────────────
+let audioCtx = null;
+function playPing() {
+  if (!STATE.audioOn) return;
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    // Short double-blip: 880Hz then 660Hz, each 80ms
+    [[880, 0], [660, 0.12]].forEach(([freq, delay]) => {
+      const osc  = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const t = audioCtx.currentTime + delay;
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.18, t + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+      osc.start(t);
+      osc.stop(t + 0.1);
+    });
+  } catch (e) { /* audio not available */ }
+}
+
+// ─── Military detection ───────────────────────────────────────────────────────
+// ADSBexchange sets dbFlags bit 1 for military.
+// As a belt-and-braces fallback, also check squawk 7777 (mil intercept)
+// and common UK/NATO military ICAO hex prefixes.
+const MIL_HEX_PREFIXES = [
+  '43c',  // UK RAF
+  '43e',  // UK RAF
+  '43f',  // UK military
+  'ae',   // US military (starts with AE)
+  'a1',   // some US mil
+];
+function isMilitary(ac) {
+  if (ac.dbFlags && (ac.dbFlags & 1)) return true;
+  if (ac.squawk === '7777') return true;
+  const hex = (ac.hex || '').toLowerCase();
+  return MIL_HEX_PREFIXES.some(p => hex.startsWith(p));
+}
+
 function processAircraft(raw) {
+  const prevHexes = new Set(STATE.knownHexes);
+
   const enriched = raw
     .filter(ac => ac.lat != null && ac.lon != null)
     .map(ac => ({
       ...ac,
-      _distNm:  haversineNm(STATE.lat, STATE.lon, ac.lat, ac.lon),
-      _bearing: bearingDeg(STATE.lat, STATE.lon, ac.lat, ac.lon),
+      _distNm:   haversineNm(STATE.lat, STATE.lon, ac.lat, ac.lon),
+      _bearing:  bearingDeg(STATE.lat, STATE.lon, ac.lat, ac.lon),
+      _military: isMilitary(ac),
     }))
     .sort((a, b) => a._distNm - b._distNm);
+
+  // Detect new contacts (hex not seen last cycle, within range)
+  STATE.newContacts.clear();
+  const currentHexes = new Set();
+  let hasNewMil = false;
+  enriched.forEach(ac => {
+    currentHexes.add(ac.hex);
+    if (ac._distNm <= STATE.radiusNm && !prevHexes.has(ac.hex) && prevHexes.size > 0) {
+      STATE.newContacts.add(ac.hex);
+      if (ac._military) hasNewMil = true;
+    }
+  });
+  STATE.knownHexes = currentHexes;
+
+  // Play audio if new contacts arrived (double-ping for military)
+  if (STATE.newContacts.size > 0) {
+    playPing();
+    if (hasNewMil) setTimeout(playPing, 350); // extra ping for mil
+  }
+
   STATE.aircraft = enriched;
   renderList();
   if (STATE.selected) renderDetail(STATE.aircraft.find(a => a.hex === STATE.selected));
-  document.getElementById('ac-count').textContent = `${enriched.length} aircraft`;
+
+  const milCount = enriched.filter(a => a._military && a._distNm <= STATE.radiusNm).length;
+  const visCount = enriched.filter(a => a._distNm <= STATE.radiusNm).length;
+  document.getElementById('ac-count').textContent =
+    milCount > 0 ? `${visCount} ac  ✦${milCount} mil` : `${visCount} aircraft`;
   document.getElementById('ft-count').textContent = `Range: ${STATE.radiusNm}nm`;
 }
 
@@ -776,25 +936,41 @@ function renderList() {
 
   const visible = STATE.aircraft.filter(ac => {
     const alt = typeof ac.alt_baro === 'number' ? ac.alt_baro : null;
-    return ac._distNm <= STATE.radiusNm && (alt === null || alt >= STATE.minAlt);
+    const inRange  = ac._distNm <= STATE.radiusNm;
+    const aboveAlt = alt === null || alt >= STATE.minAlt;
+    const milPass  = !STATE.milOnly || ac._military;
+    return inRange && aboveAlt && milPass;
   });
 
   if (visible.length === 0) {
-    list.innerHTML = '<div class="ac-item" style="color:var(--text-dim)">No aircraft in range</div>';
+    const msg = STATE.milOnly ? 'No military contacts in range' : 'No aircraft in range';
+    list.innerHTML = `<div class="ac-item" style="color:var(--text-dim)">${msg}</div>`;
     return;
   }
 
   visible.forEach(ac => {
-    const callsign = (ac.flight || ac.hex || '????').trim();
-    const alt      = typeof ac.alt_baro === 'number' ? `FL${Math.round(ac.alt_baro/100).toString().padStart(3,'0')}` : 'GND';
-    const spd      = ac.gs ? `${Math.round(ac.gs)}kt` : '—';
-    const dist     = `${ac._distNm.toFixed(1)}nm`;
-    const sel      = STATE.selected === ac.hex;
+    const callsign  = (ac.flight || ac.hex || '????').trim();
+    const alt       = typeof ac.alt_baro === 'number' ? `FL${Math.round(ac.alt_baro/100).toString().padStart(3,'0')}` : 'GND';
+    const spd       = ac.gs ? `${Math.round(ac.gs)}kt` : '—';
+    const dist      = `${ac._distNm.toFixed(1)}nm`;
+    const sel       = STATE.selected === ac.hex;
+    const isNew     = STATE.newContacts.has(ac.hex);
+    const isMil     = ac._military;
+
+    const classes = [
+      'ac-item',
+      sel     ? 'selected'    : '',
+      isNew   ? 'new-contact' : '',
+      isMil   ? 'military'    : '',
+    ].filter(Boolean).join(' ');
+
+    const milTag = isMil ? '<span class="mil-badge">MIL</span>' : '';
+    const newTag = isNew ? '<span style="font-size:9px;color:#fff;margin-left:4px">NEW</span>' : '';
 
     const div = document.createElement('div');
-    div.className = `ac-item${sel ? ' selected' : ''}`;
+    div.className = classes;
     div.innerHTML = `
-      <div class="callsign">${callsign}</div>
+      <div class="callsign">${callsign}${milTag}${newTag}</div>
       <div class="ac-meta">
         <span>${alt}</span>
         <span>${spd}</span>
@@ -843,14 +1019,15 @@ function renderDetail(ac) {
 // ─── Demo mode ────────────────────────────────────────────────────────────────
 function injectDemoData() {
   const seed = [
-    { hex:'400615', flight:'BAW123 ', alt_baro:32000, gs:480, track:220, squawk:'1234', t:'B77W' },
-    { hex:'4007f1', flight:'EZY55KL', alt_baro:28000, gs:420, track:135, squawk:'2341', t:'A320' },
-    { hex:'4ca7b3', flight:'RYR7KQ ', alt_baro:15000, gs:380, track: 60, squawk:'3412', t:'B738' },
-    { hex:'3c4b27', flight:'DLH44B ', alt_baro:41000, gs:510, track:290, squawk:'4123', t:'A359' },
-    { hex:'4b1a20', flight:'KLM302 ', alt_baro: 8000, gs:290, track:350, squawk:'1432', t:'E190' },
-    { hex:'407c88', flight:'IBE21AH', alt_baro:37000, gs:490, track:185, squawk:'2143', t:'A333' },
-    { hex:'4cad20', flight:'AER831 ', alt_baro: 3500, gs:210, track: 95, squawk:'3214', t:'AT75' },
-    { hex:'43c3b1', flight:'TOM24V ', alt_baro:22000, gs:440, track:310, squawk:'4321', t:'B752' },
+    { hex:'400615', flight:'BAW123 ', alt_baro:32000, gs:480, track:220, squawk:'1234', t:'B77W', dbFlags:0 },
+    { hex:'4007f1', flight:'EZY55KL', alt_baro:28000, gs:420, track:135, squawk:'2341', t:'A320', dbFlags:0 },
+    { hex:'4ca7b3', flight:'RYR7KQ ', alt_baro:15000, gs:380, track: 60, squawk:'3412', t:'B738', dbFlags:0 },
+    { hex:'3c4b27', flight:'DLH44B ', alt_baro:41000, gs:510, track:290, squawk:'4123', t:'A359', dbFlags:0 },
+    { hex:'4b1a20', flight:'KLM302 ', alt_baro: 8000, gs:290, track:350, squawk:'1432', t:'E190', dbFlags:0 },
+    { hex:'407c88', flight:'IBE21AH', alt_baro:37000, gs:490, track:185, squawk:'2143', t:'A333', dbFlags:0 },
+    { hex:'4cad20', flight:'AER831 ', alt_baro: 3500, gs:210, track: 95, squawk:'3214', t:'AT75', dbFlags:0 },
+    { hex:'43c3b1', flight:'RRR6872', alt_baro:22000, gs:330, track:310, squawk:'7004', t:'ASTR', dbFlags:1 },  // RAF Astute — military flag
+    { hex:'43e14a', flight:'NATO01 ', alt_baro: 5000, gs:280, track: 40, squawk:'7777', t:'E3CF', dbFlags:1 },  // NATO AWACS — mil squawk
   ];
   // Drift positions slowly over time
   const t = Date.now() / 1000;
@@ -881,6 +1058,19 @@ document.getElementById('alt-slider').addEventListener('input', function() {
   const label  = STATE.minAlt === 0 ? 'ALL' : `${STATE.minAlt.toLocaleString()}ft`;
   document.getElementById('alt-val').textContent = label;
   renderList();
+});
+
+document.getElementById('mil-toggle').addEventListener('change', function() {
+  STATE.milOnly = this.checked;
+  renderList();
+});
+
+document.getElementById('audio-badge').addEventListener('click', function() {
+  STATE.audioOn = !STATE.audioOn;
+  this.textContent = STATE.audioOn ? '♪ ON' : '♪ OFF';
+  this.classList.toggle('on', STATE.audioOn);
+  // Play a test ping when enabling so user knows it works
+  if (STATE.audioOn) playPing();
 });
 
 // Click on radar canvas to select nearest aircraft
