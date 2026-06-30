@@ -308,11 +308,11 @@
     </div>
     <div class="cfg-field">
       <label>HOME LATITUDE</label>
-      <input type="number" id="cfg-lat" placeholder="51.5074" step="0.0001">
+      <input type="number" id="cfg-lat" placeholder="50.2330" step="0.0001" value="50.2330">
     </div>
     <div class="cfg-field">
       <label>HOME LONGITUDE</label>
-      <input type="number" id="cfg-lon" placeholder="-0.1278" step="0.0001">
+      <input type="number" id="cfg-lon" placeholder="-5.2280" step="0.0001" value="-5.2280">
     </div>
     <div class="cfg-field">
       <label>POLL INTERVAL (seconds)</label>
@@ -329,10 +329,15 @@
 
 <script>
 // ─── State ────────────────────────────────────────────────────────────────────
+// Clockwise rotation offset in degrees applied to the entire radar view.
+// 80° means "up" on screen points roughly NNE — tuned so aircraft positions
+// match your real-world view when sitting at your desk in Redruth.
+const ROTATION_DEG = 80;
+
 const STATE = {
   apiKey:      '',
-  lat:         51.5074,
-  lon:         -0.1278,
+  lat:         50.2330,
+  lon:         -5.2280,
   pollMs:      5000,
   radiusNm:    100,
   minAlt:      0,
@@ -347,6 +352,9 @@ const STATE = {
   // phosphor trail: stores {x,y,age} per pixel quadrant
   trail:       new Map(),
   pollTimer:   null,
+  // GeoJSON coastline features once loaded
+  coastFeatures: null,
+  coastLoading:  false,
 };
 
 // ─── Canvas setup ─────────────────────────────────────────────────────────────
@@ -386,7 +394,8 @@ function bearingDeg(lat1, lon1, lat2, lon2) {
 
 function polarToXY(bearing, distNm) {
   const frac  = distNm / STATE.radiusNm;
-  const angle = (bearing - 90) * Math.PI / 180;
+  // Apply clockwise rotation: subtract from bearing so the view rotates CW
+  const angle = (bearing - 90 + ROTATION_DEG) * Math.PI / 180;
   return {
     x: CX + frac * R * Math.cos(angle),
     y: CY + frac * R * Math.sin(angle),
@@ -404,6 +413,81 @@ function altColour(alt) {
   return '#ff6666';
 }
 
+// ─── Coastline map ────────────────────────────────────────────────────────────
+// Fetches a low-resolution Natural Earth coastline GeoJSON covering
+// the British Isles region, then projects each coordinate onto the radar.
+
+async function loadCoastline() {
+  if (STATE.coastFeatures || STATE.coastLoading) return;
+  STATE.coastLoading = true;
+  // Natural Earth 1:50m coastline via the martynafford CDN on GitHub
+  // We use the raw GitHub URL for the 50m coastline which is ~500 KB
+  const url = 'https://raw.githubusercontent.com/martynafford/natural-earth-geojson/master/50m/physical/ne_50m_coastline.json';
+  try {
+    const res  = await fetch(url);
+    const data = await res.json();
+    STATE.coastFeatures = data.features || [];
+  } catch (e) {
+    console.warn('Coastline load failed:', e);
+    STATE.coastFeatures = [];
+  }
+  STATE.coastLoading = false;
+}
+
+function geoToXY(lon, lat) {
+  // Convert a geographic coordinate to radar pixel position,
+  // relative to the home position, applying the view rotation.
+  const dist    = haversineNm(STATE.lat, STATE.lon, lat, lon);
+  const bearing = bearingDeg(STATE.lat, STATE.lon, lat, lon);
+  if (dist > STATE.radiusNm * 1.5) return null; // outside visible area
+  const frac  = dist / STATE.radiusNm;
+  const angle = (bearing - 90 + ROTATION_DEG) * Math.PI / 180;
+  return {
+    x: CX + frac * R * Math.cos(angle),
+    y: CY + frac * R * Math.sin(angle),
+  };
+}
+
+function drawCoastline() {
+  if (!STATE.coastFeatures || STATE.coastFeatures.length === 0) return;
+
+  // Clip drawing to the radar circle
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(CX, CY, R - 1, 0, Math.PI * 2);
+  ctx.clip();
+
+  ctx.strokeStyle = 'rgba(0, 180, 90, 0.22)';
+  ctx.lineWidth   = 1;
+  ctx.lineJoin    = 'round';
+  ctx.lineCap     = 'round';
+
+  STATE.coastFeatures.forEach(feature => {
+    const geom = feature.geometry;
+    if (!geom) return;
+
+    const drawLineString = coords => {
+      let started = false;
+      ctx.beginPath();
+      coords.forEach(([lon, lat]) => {
+        const pt = geoToXY(lon, lat);
+        if (!pt) { started = false; return; }
+        if (!started) { ctx.moveTo(pt.x, pt.y); started = true; }
+        else ctx.lineTo(pt.x, pt.y);
+      });
+      ctx.stroke();
+    };
+
+    if (geom.type === 'LineString') {
+      drawLineString(geom.coordinates);
+    } else if (geom.type === 'MultiLineString') {
+      geom.coordinates.forEach(drawLineString);
+    }
+  });
+
+  ctx.restore();
+}
+
 // ─── Draw ─────────────────────────────────────────────────────────────────────
 function draw(dt) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -416,6 +500,7 @@ function draw(dt) {
   ctx.fill();
   ctx.restore();
 
+  drawCoastline();
   drawPhosphorTrail();
   drawSweep();
   drawRingsAndGrid();
@@ -436,9 +521,9 @@ function drawRingsAndGrid() {
     ctx.stroke();
   });
 
-  // Cross hairs
+  // Cross hairs — rotated to match view
   for (let d = 0; d < 360; d += 45) {
-    const angle = (d - 90) * Math.PI / 180;
+    const angle = (d - 90 + ROTATION_DEG) * Math.PI / 180;
     ctx.beginPath();
     ctx.moveTo(CX, CY);
     ctx.lineTo(CX + R * Math.cos(angle), CY + R * Math.sin(angle));
@@ -454,13 +539,13 @@ function drawRingsAndGrid() {
   ctx.lineWidth = 2;
   ctx.stroke();
 
-  // Cardinals
+  // Cardinals — rotate labels to match view rotation
   const cardinals = [['N',0],['E',90],['S',180],['W',270]];
   ctx.font = '12px "Share Tech Mono", monospace';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   cardinals.forEach(([lbl, deg]) => {
-    const angle = (deg - 90) * Math.PI / 180;
+    const angle = (deg - 90 + ROTATION_DEG) * Math.PI / 180;
     const lx = CX + (R + 18) * Math.cos(angle);
     const ly = CY + (R + 18) * Math.sin(angle);
     ctx.fillStyle = '#00cc6a';
@@ -502,7 +587,7 @@ function recordTrail(x, y, r, key) {
 }
 
 function drawSweep() {
-  const sweepRad = (STATE.sweepAngle - 90) * Math.PI / 180;
+  const sweepRad = (STATE.sweepAngle - 90 + ROTATION_DEG) * Math.PI / 180;
   const WEDGE    = 28 * Math.PI / 180;
 
   // Glow wedge
@@ -547,11 +632,14 @@ function drawAircraft() {
     const col  = altColour(alt);
     const sel  = STATE.selected === ac.hex;
     const size = sel ? 8 : 6;
-    const track = (ac.track || 0) * Math.PI / 180;
+    // Rotate heading chevron by the same view rotation so it points correctly
+    const track = ((ac.track || 0) + ROTATION_DEG) * Math.PI / 180;
 
     // Light up trail at blip position
     const trailKey = `${Math.round(ac._bearing)}-${ac.hex}`;
-    const sweepDiff = Math.abs(((STATE.sweepAngle - ac._bearing) + 360) % 360);
+    // Compare sweep against the rotated bearing as seen on screen
+    const displayBearing = (ac._bearing + ROTATION_DEG + 360) % 360;
+    const sweepDiff = Math.abs(((STATE.sweepAngle - displayBearing) + 360) % 360);
     if (sweepDiff < 30) recordTrail(x, y, size * 0.8, trailKey);
 
     // Plane chevron
@@ -829,6 +917,14 @@ document.getElementById('cfg-cancel').addEventListener('click', closeConfig);
 document.getElementById('cfg-demo').addEventListener('click', () => {
   STATE.demoMode = true;
   STATE.apiKey   = '';
+  // Use Redruth as the demo home position
+  if (!document.getElementById('cfg-lat').value) STATE.lat = 50.2330;
+  if (!document.getElementById('cfg-lon').value) STATE.lon = -5.2280;
+  const dLat = parseFloat(document.getElementById('cfg-lat').value) || STATE.lat;
+  const dLon = parseFloat(document.getElementById('cfg-lon').value) || STATE.lon;
+  STATE.lat = dLat; STATE.lon = dLon;
+  STATE.coastFeatures = null;
+  loadCoastline();
   closeConfig();
   startPolling();
   setStatus('DEMO MODE', 'status-warn');
@@ -848,6 +944,9 @@ document.getElementById('cfg-save').addEventListener('click', () => {
   STATE.lon      = lon;
   STATE.pollMs   = Math.max(3000, poll * 1000);
   STATE.demoMode = false;
+  // Reset and reload coastline centred on new position
+  STATE.coastFeatures = null;
+  loadCoastline();
   document.getElementById('hdr-coords').textContent =
     `${lat.toFixed(4)}°N  ${Math.abs(lon).toFixed(4)}°W`;
   closeConfig();
@@ -867,6 +966,8 @@ function startPolling() {
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
+// Load coastline in background immediately
+loadCoastline();
 // Show config on first load
 openConfig();
 document.getElementById('hdr-coords').textContent = '— configure to start —';
