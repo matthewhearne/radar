@@ -186,25 +186,14 @@
   /* ── New contact pulse animation ── */
   @keyframes newContact {
     0%   { background: rgba(0,255,136,0.35); box-shadow: inset 0 0 8px rgba(0,255,136,0.5); }
-    40%  { background: rgba(0,255,136,0.15); }
-    70%  { background: rgba(0,255,136,0.08); }
+    20%  { background: rgba(0,255,136,0.15); }
+    60%  { background: rgba(0,255,136,0.08); }
     100% { background: transparent; box-shadow: none; }
   }
-  .ac-item.new-contact { animation: newContact 2.5s ease-out forwards; }
+  .ac-item.new-contact { animation: newContact 5s ease-out forwards; }
   .ac-item.new-contact .callsign { color: #ffffff; }
 
-  /* ── Audio indicator in sidebar header ── */
-  #audio-badge {
-    font-size: 10px;
-    color: var(--text-dim);
-    border: 1px solid var(--green-dim);
-    padding: 1px 5px;
-    cursor: pointer;
-    transition: all 0.15s;
-    user-select: none;
-  }
-  #audio-badge:hover { border-color: var(--green); color: var(--green); }
-  #audio-badge.on { color: var(--green); border-color: var(--green); }
+
 
   #ac-list {
     flex: 1;
@@ -348,7 +337,6 @@
     <div id="sidebar-header">
       <span id="ac-count">0 aircraft</span>
       <div style="display:flex;gap:6px;align-items:center;">
-        <span id="audio-badge" title="Toggle audio alert for new contacts">♪ OFF</span>
         <button id="cfg-btn">⚙ CONFIG</button>
       </div>
     </div>
@@ -427,7 +415,6 @@ const STATE = {
   radiusNm:    100,
   minAlt:      0,
   milOnly:     false,
-  audioOn:     false,
   aircraft:    [],
   selected:    null,
   sweepAngle:  0,
@@ -838,30 +825,6 @@ async function fetchAircraft() {
   }
 }
 
-// ─── Audio ping ───────────────────────────────────────────────────────────────
-let audioCtx = null;
-function playPing() {
-  if (!STATE.audioOn) return;
-  try {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    // Short double-blip: 880Hz then 660Hz, each 80ms
-    [[880, 0], [660, 0.12]].forEach(([freq, delay]) => {
-      const osc  = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.type = 'sine';
-      osc.frequency.value = freq;
-      const t = audioCtx.currentTime + delay;
-      gain.gain.setValueAtTime(0, t);
-      gain.gain.linearRampToValueAtTime(0.18, t + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
-      osc.start(t);
-      osc.stop(t + 0.1);
-    });
-  } catch (e) { /* audio not available */ }
-}
-
 // ─── Military detection ───────────────────────────────────────────────────────
 // ADSBexchange sets dbFlags bit 1 for military.
 // As a belt-and-braces fallback, also check squawk 7777 (mil intercept)
@@ -905,12 +868,6 @@ function processAircraft(raw) {
     }
   });
   STATE.knownHexes = currentHexes;
-
-  // Play audio if new contacts arrived (double-ping for military)
-  if (STATE.newContacts.size > 0) {
-    playPing();
-    if (hasNewMil) setTimeout(playPing, 350); // extra ping for mil
-  }
 
   STATE.aircraft = enriched;
   renderList();
@@ -994,18 +951,23 @@ function renderDetail(ac) {
     return;
   }
   const callsign = (ac.flight || ac.hex || '????').trim();
-  const alt   = typeof ac.alt_baro === 'number' ? `FL${Math.round(ac.alt_baro/100).toString().padStart(3,'0')} (${ac.alt_baro.toLocaleString()}ft)` : 'On ground';
-  const spd   = ac.gs   ? `${Math.round(ac.gs)} kt` : '—';
-  const hdg   = ac.track ? `${Math.round(ac.track)}°` : '—';
-  const vr    = ac.baro_rate ? `${ac.baro_rate > 0 ? '+':''}${ac.baro_rate} fpm` : '—';
-  const dist  = `${ac._distNm.toFixed(1)} nm`;
-  const brng  = `${Math.round(ac._bearing)}°`;
-  const squawk = ac.squawk || '—';
-  const type  = ac.t || '—';
+  const reg     = ac.r    || '—';
+  const type    = ac.t    || '—';
+  const desc    = ac.desc || '—';
+  const alt     = typeof ac.alt_baro === 'number' ? `FL${Math.round(ac.alt_baro/100).toString().padStart(3,'0')} (${ac.alt_baro.toLocaleString()}ft)` : 'On ground';
+  const spd     = ac.gs        ? `${Math.round(ac.gs)} kt`                        : '—';
+  const hdg     = ac.track     ? `${Math.round(ac.track)}°`                       : '—';
+  const vr      = ac.baro_rate ? `${ac.baro_rate > 0 ? '+':''}${ac.baro_rate} fpm`: '—';
+  const dist    = `${ac._distNm.toFixed(1)} nm`;
+  const brng    = `${Math.round(ac._bearing)}°`;
+  const squawk  = ac.squawk || '—';
+  const milFlag = ac._military ? '<span class="mil-badge" style="margin-left:6px">MIL</span>' : '';
 
   panel.innerHTML = `
-    <div class="dp-title">${callsign}</div>
-    <div class="dp-row"><span>Type</span><span>${type}</span></div>
+    <div class="dp-title">${callsign}${milFlag}</div>
+    <div class="dp-row"><span>Registration</span><span>${reg}</span></div>
+    <div class="dp-row"><span>ICAO type</span><span>${type}</span></div>
+    <div class="dp-row" title="${desc}" style="cursor:default"><span>Aircraft</span><span style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${desc}">${desc}</span></div>
     <div class="dp-row"><span>Altitude</span><span>${alt}</span></div>
     <div class="dp-row"><span>Speed</span><span>${spd}</span></div>
     <div class="dp-row"><span>Heading</span><span>${hdg}</span></div>
@@ -1019,15 +981,15 @@ function renderDetail(ac) {
 // ─── Demo mode ────────────────────────────────────────────────────────────────
 function injectDemoData() {
   const seed = [
-    { hex:'400615', flight:'BAW123 ', alt_baro:32000, gs:480, track:220, squawk:'1234', t:'B77W', dbFlags:0 },
-    { hex:'4007f1', flight:'EZY55KL', alt_baro:28000, gs:420, track:135, squawk:'2341', t:'A320', dbFlags:0 },
-    { hex:'4ca7b3', flight:'RYR7KQ ', alt_baro:15000, gs:380, track: 60, squawk:'3412', t:'B738', dbFlags:0 },
-    { hex:'3c4b27', flight:'DLH44B ', alt_baro:41000, gs:510, track:290, squawk:'4123', t:'A359', dbFlags:0 },
-    { hex:'4b1a20', flight:'KLM302 ', alt_baro: 8000, gs:290, track:350, squawk:'1432', t:'E190', dbFlags:0 },
-    { hex:'407c88', flight:'IBE21AH', alt_baro:37000, gs:490, track:185, squawk:'2143', t:'A333', dbFlags:0 },
-    { hex:'4cad20', flight:'AER831 ', alt_baro: 3500, gs:210, track: 95, squawk:'3214', t:'AT75', dbFlags:0 },
-    { hex:'43c3b1', flight:'RRR6872', alt_baro:22000, gs:330, track:310, squawk:'7004', t:'ASTR', dbFlags:1 },  // RAF Astute — military flag
-    { hex:'43e14a', flight:'NATO01 ', alt_baro: 5000, gs:280, track: 40, squawk:'7777', t:'E3CF', dbFlags:1 },  // NATO AWACS — mil squawk
+    { hex:'400615', flight:'BAW123 ', alt_baro:32000, gs:480, track:220, squawk:'1234', t:'B77W', r:'G-STBA', desc:'Boeing 777-300ER',         dbFlags:0 },
+    { hex:'4007f1', flight:'EZY55KL', alt_baro:28000, gs:420, track:135, squawk:'2341', t:'A320', r:'G-EZWA', desc:'Airbus A320-214',           dbFlags:0 },
+    { hex:'4ca7b3', flight:'RYR7KQ ', alt_baro:15000, gs:380, track: 60, squawk:'3412', t:'B738', r:'EI-DCL', desc:'Boeing 737-800',            dbFlags:0 },
+    { hex:'3c4b27', flight:'DLH44B ', alt_baro:41000, gs:510, track:290, squawk:'4123', t:'A359', r:'D-AIVB', desc:'Airbus A350-900',           dbFlags:0 },
+    { hex:'4b1a20', flight:'KLM302 ', alt_baro: 8000, gs:290, track:350, squawk:'1432', t:'E190', r:'PH-EZA', desc:'Embraer ERJ-190',           dbFlags:0 },
+    { hex:'407c88', flight:'IBE21AH', alt_baro:37000, gs:490, track:185, squawk:'2143', t:'A333', r:'EC-LZX', desc:'Airbus A330-300',           dbFlags:0 },
+    { hex:'4cad20', flight:'AER831 ', alt_baro: 3500, gs:210, track: 95, squawk:'3214', t:'AT75', r:'EI-REL', desc:'ATR 72-500',                dbFlags:0 },
+    { hex:'43c3b1', flight:'RRR6872', alt_baro:22000, gs:330, track:310, squawk:'7004', t:'ASTR', r:'ZZ416',  desc:'Astute-class Patrol',       dbFlags:1 },
+    { hex:'43e14a', flight:'NATO01 ', alt_baro: 5000, gs:280, track: 40, squawk:'7777', t:'E3CF', r:'ZH103',  desc:'Boeing E-3D Sentry AEW.1', dbFlags:1 },
   ];
   // Drift positions slowly over time
   const t = Date.now() / 1000;
@@ -1063,14 +1025,6 @@ document.getElementById('alt-slider').addEventListener('input', function() {
 document.getElementById('mil-toggle').addEventListener('change', function() {
   STATE.milOnly = this.checked;
   renderList();
-});
-
-document.getElementById('audio-badge').addEventListener('click', function() {
-  STATE.audioOn = !STATE.audioOn;
-  this.textContent = STATE.audioOn ? '♪ ON' : '♪ OFF';
-  this.classList.toggle('on', STATE.audioOn);
-  // Play a test ping when enabling so user knows it works
-  if (STATE.audioOn) playPing();
 });
 
 // Click on radar canvas to select nearest aircraft
