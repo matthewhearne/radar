@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ADS-B Radar</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #070d14;
+    --surface:   #0a1520;
+    --border:    #0d2a1a;
+    --green:     #00ff88;
+    --green-dim: #1a6644;
+    --green-mid: #00cc6a;
+    --green-faint:#052a18;
+    --amber:     #ffb347;
+    --cyan:      #00cfff;
+    --red:       #ff4444;
+    --text:      #00ff88;
+    --text-dim:  #2a7a50;
+    --mono:      'Share Tech Mono', 'Courier New', monospace;
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--green);
+    font-family: var(--mono);
+    overflow: hidden;
+    user-select: none;
+  }
+
+  #app {
+    display: grid;
+    grid-template-rows: 36px 1fr 28px;
+    grid-template-columns: 1fr 240px;
+    grid-template-areas:
+      "header header"
+      "radar  sidebar"
+      "footer footer";
+    width: 100vw;
+    height: 100vh;
+  }
+
+  /* ── Header ── */
+  #header {
+    grid-area: header;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  #header .title { font-size: 14px; color: var(--green); letter-spacing: 0.12em; }
+  #header .coords { color: var(--text-dim); }
+  #header .utc { color: var(--green-mid); }
+
+  /* ── Radar canvas area ── */
+  #radar-wrap {
+    grid-area: radar;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    overflow: hidden;
+  }
+
+  #radar-canvas {
+    display: block;
+    cursor: crosshair;
+  }
+
+  /* Scanline overlay */
+  #radar-wrap::after {
+    content: '';
+    position: absolute; inset: 0;
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0px, transparent 3px,
+      rgba(0,0,0,0.08) 3px, rgba(0,0,0,0.08) 4px
+    );
+    pointer-events: none;
+  }
+
+  /* ── Sidebar ── */
+  #sidebar {
+    grid-area: sidebar;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #sidebar-header {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text-dim);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  #sidebar-header span { color: var(--green); }
+
+  #controls {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .ctrl-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .ctrl-row label { color: var(--text-dim); }
+  .ctrl-row input[type=range] {
+    width: 100px;
+    accent-color: var(--green);
+  }
+  .ctrl-val { color: var(--green); min-width: 36px; text-align: right; font-size: 11px; }
+
+  #ac-list {
+    flex: 1;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--green-dim) transparent;
+  }
+
+  .ac-item {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--green-faint);
+    cursor: pointer;
+    transition: background 0.1s;
+    font-size: 11px;
+  }
+  .ac-item:hover { background: rgba(0,255,136,0.06); }
+  .ac-item.selected { background: rgba(0,255,136,0.1); border-left: 2px solid var(--green); }
+  .ac-item .callsign { font-size: 12px; color: var(--green); margin-bottom: 2px; }
+  .ac-item .ac-meta { color: var(--text-dim); display: flex; gap: 8px; flex-wrap: wrap; }
+  .ac-item .ac-meta span { white-space: nowrap; }
+
+  #detail-panel {
+    border-top: 1px solid var(--border);
+    padding: 10px 12px;
+    font-size: 11px;
+    min-height: 130px;
+    background: rgba(0,255,136,0.03);
+  }
+  #detail-panel .dp-title { color: var(--green); font-size: 13px; margin-bottom: 8px; }
+  #detail-panel .dp-row { display: flex; justify-content: space-between; color: var(--text-dim); margin-bottom: 3px; }
+  #detail-panel .dp-row span:last-child { color: var(--green-mid); }
+  #detail-panel .dp-empty { color: var(--text-dim); padding-top: 8px; }
+
+  /* ── Footer ── */
+  #footer {
+    grid-area: footer;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    font-size: 11px;
+  }
+  #footer .status-ok  { color: var(--green-mid); }
+  #footer .status-err { color: var(--red); }
+  #footer .status-warn{ color: var(--amber); }
+
+  /* ── Config modal ── */
+  #cfg-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.8);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+  #cfg-overlay.open { display: flex; }
+  #cfg-box {
+    background: var(--surface);
+    border: 1px solid var(--green-dim);
+    padding: 24px;
+    width: 380px;
+    font-size: 12px;
+  }
+  #cfg-box h2 { color: var(--green); font-size: 14px; margin-bottom: 16px; letter-spacing: 0.1em; }
+  .cfg-field { margin-bottom: 12px; }
+  .cfg-field label { display: block; color: var(--text-dim); margin-bottom: 4px; font-size: 11px; }
+  .cfg-field input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--green-dim);
+    color: var(--green);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 6px 8px;
+    outline: none;
+  }
+  .cfg-field input:focus { border-color: var(--green); }
+  .cfg-note { color: var(--text-dim); font-size: 10px; margin-top: 4px; }
+  .cfg-btns { display: flex; gap: 8px; margin-top: 16px; }
+  .cfg-btns button {
+    flex: 1;
+    background: transparent;
+    border: 1px solid var(--green-dim);
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 7px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .cfg-btns button.primary {
+    border-color: var(--green);
+    color: var(--green);
+  }
+  .cfg-btns button:hover { background: rgba(0,255,136,0.08); }
+
+  #cfg-btn {
+    background: transparent;
+    border: 1px solid var(--green-dim);
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 2px 8px;
+    cursor: pointer;
+    letter-spacing: 0.05em;
+  }
+  #cfg-btn:hover { border-color: var(--green); color: var(--green); }
+
+  @media (max-width: 640px) {
+    #app {
+      grid-template-columns: 1fr;
+      grid-template-rows: 36px 1fr 180px 28px;
+      grid-template-areas: "header" "radar" "sidebar" "footer";
+    }
+    #sidebar { border-left: none; border-top: 1px solid var(--border); }
+    #ac-list { max-height: 90px; }
+    #detail-panel { display: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <header id="header">
+    <span class="title">▶ ADS-B RADAR</span>
+    <span class="coords" id="hdr-coords">—</span>
+    <span class="utc" id="hdr-utc">——:——:—— UTC</span>
+  </header>
+
+  <div id="radar-wrap">
+    <canvas id="radar-canvas"></canvas>
+  </div>
+
+  <aside id="sidebar">
+    <div id="sidebar-header">
+      <span id="ac-count">0 aircraft</span>
+      <button id="cfg-btn">⚙ CONFIG</button>
+    </div>
+    <div id="controls">
+      <div class="ctrl-row">
+        <label>Range</label>
+        <input type="range" id="range-slider" min="25" max="300" step="25" value="100">
+        <span class="ctrl-val" id="range-val">100 nm</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Min altitude</label>
+        <input type="range" id="alt-slider" min="0" max="45000" step="1000" value="0">
+        <span class="ctrl-val" id="alt-val">ALL</span>
+      </div>
+    </div>
+    <div id="ac-list"></div>
+    <div id="detail-panel"><div class="dp-empty">Select an aircraft</div></div>
+  </aside>
+
+  <footer id="footer">
+    <span id="ft-status" class="status-warn">Not configured — click ⚙ CONFIG</span>
+    <span id="ft-poll">—</span>
+    <span id="ft-count">—</span>
+  </footer>
+</div>
+
+<!-- Config modal -->
+<div id="cfg-overlay">
+  <div id="cfg-box">
+    <h2>⚙ CONFIGURATION</h2>
+    <div class="cfg-field">
+      <label>RAPIDAPI KEY</label>
+      <input type="password" id="cfg-key" placeholder="your-rapidapi-key-here">
+      <div class="cfg-note">From rapidapi.com → ADSBexchange.com subscription</div>
+    </div>
+    <div class="cfg-field">
+      <label>HOME LATITUDE</label>
+      <input type="number" id="cfg-lat" placeholder="51.5074" step="0.0001">
+    </div>
+    <div class="cfg-field">
+      <label>HOME LONGITUDE</label>
+      <input type="number" id="cfg-lon" placeholder="-0.1278" step="0.0001">
+    </div>
+    <div class="cfg-field">
+      <label>POLL INTERVAL (seconds)</label>
+      <input type="number" id="cfg-poll" placeholder="5" min="3" max="60" value="5">
+      <div class="cfg-note">Minimum 3s — keep within your API plan's request limit</div>
+    </div>
+    <div class="cfg-btns">
+      <button id="cfg-cancel">CANCEL</button>
+      <button id="cfg-demo">DEMO MODE</button>
+      <button class="primary" id="cfg-save">CONNECT</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── State ────────────────────────────────────────────────────────────────────
+const STATE = {
+  apiKey:      '',
+  lat:         51.5074,
+  lon:         -0.1278,
+  pollMs:      5000,
+  radiusNm:    100,
+  minAlt:      0,
+  aircraft:    [],
+  selected:    null,
+  sweepAngle:  0,
+  lastFetch:   0,
+  statusMsg:   'Not configured',
+  statusClass: 'status-warn',
+  errorCount:  0,
+  demoMode:    false,
+  // phosphor trail: stores {x,y,age} per pixel quadrant
+  trail:       new Map(),
+  pollTimer:   null,
+};
+
+// ─── Canvas setup ─────────────────────────────────────────────────────────────
+const canvas = document.getElementById('radar-canvas');
+const ctx    = canvas.getContext('2d');
+let CX, CY, R; // centre x, centre y, radar radius px
+
+function resize() {
+  const wrap = document.getElementById('radar-wrap');
+  canvas.width  = wrap.clientWidth;
+  canvas.height = wrap.clientHeight;
+  const pad = 32;
+  R  = Math.min(canvas.width, canvas.height) / 2 - pad;
+  CX = canvas.width  / 2;
+  CY = canvas.height / 2;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ─── Geo helpers ─────────────────────────────────────────────────────────────
+function haversineNm(lat1, lon1, lat2, lon2) {
+  const R  = 3440.065;
+  const d1 = (lat2 - lat1) * Math.PI / 180;
+  const d2 = (lon2 - lon1) * Math.PI / 180;
+  const a  = Math.sin(d1/2)**2 +
+    Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(d2/2)**2;
+  return R * 2 * Math.asin(Math.sqrt(a));
+}
+
+function bearingDeg(lat1, lon1, lat2, lon2) {
+  const dlon = (lon2 - lon1) * Math.PI / 180;
+  const y = Math.sin(dlon) * Math.cos(lat2 * Math.PI / 180);
+  const x = Math.cos(lat1*Math.PI/180)*Math.sin(lat2*Math.PI/180) -
+             Math.sin(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.cos(dlon);
+  return (Math.atan2(y, x) * 180/Math.PI + 360) % 360;
+}
+
+function polarToXY(bearing, distNm) {
+  const frac  = distNm / STATE.radiusNm;
+  const angle = (bearing - 90) * Math.PI / 180;
+  return {
+    x: CX + frac * R * Math.cos(angle),
+    y: CY + frac * R * Math.sin(angle),
+  };
+}
+
+// ─── Altitude colour ──────────────────────────────────────────────────────────
+function altColour(alt) {
+  if (alt === null || alt === undefined || alt === 'ground') return '#888888';
+  const a = Number(alt);
+  if (a <  5000) return '#00cfff';
+  if (a < 15000) return '#00ff88';
+  if (a < 25000) return '#aaff44';
+  if (a < 35000) return '#ffb347';
+  return '#ff6666';
+}
+
+// ─── Draw ─────────────────────────────────────────────────────────────────────
+function draw(dt) {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Background inside radar circle
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(CX, CY, R, 0, Math.PI*2);
+  ctx.fillStyle = '#050c10';
+  ctx.fill();
+  ctx.restore();
+
+  drawPhosphorTrail();
+  drawSweep();
+  drawRingsAndGrid();
+  drawAircraft();
+  drawHomeMarker();
+  drawRangeLabels();
+}
+
+function drawRingsAndGrid() {
+  const rings = [0.25, 0.5, 0.75, 1.0];
+  rings.forEach((f, i) => {
+    const r   = R * f;
+    const dim = i < rings.length - 1;
+    ctx.beginPath();
+    ctx.arc(CX, CY, r, 0, Math.PI*2);
+    ctx.strokeStyle = dim ? '#0a2218' : '#124d2a';
+    ctx.lineWidth   = dim ? 1 : 1.5;
+    ctx.stroke();
+  });
+
+  // Cross hairs
+  for (let d = 0; d < 360; d += 45) {
+    const angle = (d - 90) * Math.PI / 180;
+    ctx.beginPath();
+    ctx.moveTo(CX, CY);
+    ctx.lineTo(CX + R * Math.cos(angle), CY + R * Math.sin(angle));
+    ctx.strokeStyle = d % 90 === 0 ? '#0a2218' : '#070f0c';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  // Outer ring clip
+  ctx.beginPath();
+  ctx.arc(CX, CY, R, 0, Math.PI*2);
+  ctx.strokeStyle = '#1a5c30';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Cardinals
+  const cardinals = [['N',0],['E',90],['S',180],['W',270]];
+  ctx.font = '12px "Share Tech Mono", monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  cardinals.forEach(([lbl, deg]) => {
+    const angle = (deg - 90) * Math.PI / 180;
+    const lx = CX + (R + 18) * Math.cos(angle);
+    const ly = CY + (R + 18) * Math.sin(angle);
+    ctx.fillStyle = '#00cc6a';
+    ctx.fillText(lbl, lx, ly);
+  });
+}
+
+function drawRangeLabels() {
+  const rings = [0.25, 0.5, 0.75, 1.0];
+  ctx.font = '10px "Share Tech Mono", monospace';
+  ctx.fillStyle = '#1a5c30';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'bottom';
+  rings.forEach(f => {
+    const nm  = Math.round(STATE.radiusNm * f);
+    const r   = R * f;
+    ctx.fillText(`${nm}nm`, CX + 4, CY - r + 1);
+  });
+}
+
+// Phosphor trail — we store lit positions keyed by angle bucket
+// Each sweep pass lights up blip positions; they fade over ~4 sweeps
+function drawPhosphorTrail() {
+  // Decay existing trail
+  STATE.trail.forEach((entry, key) => {
+    entry.alpha -= 0.012;
+    if (entry.alpha <= 0) STATE.trail.delete(key);
+    else {
+      ctx.beginPath();
+      ctx.arc(entry.x, entry.y, entry.r, 0, Math.PI*2);
+      ctx.fillStyle = `rgba(0,255,136,${entry.alpha * 0.35})`;
+      ctx.fill();
+    }
+  });
+}
+
+function recordTrail(x, y, r, key) {
+  STATE.trail.set(key, { x, y, r, alpha: 1.0 });
+}
+
+function drawSweep() {
+  const sweepRad = (STATE.sweepAngle - 90) * Math.PI / 180;
+  const WEDGE    = 28 * Math.PI / 180;
+
+  // Glow wedge
+  const grad = ctx.createConicalGradient
+    ? null   // fallback below
+    : null;
+
+  // Draw as filled arc sector with alpha gradient
+  const steps = 24;
+  for (let i = 0; i < steps; i++) {
+    const t     = i / steps;
+    const angle = sweepRad - WEDGE * (1 - t);
+    const alpha = t * 0.22;
+    ctx.beginPath();
+    ctx.moveTo(CX, CY);
+    ctx.arc(CX, CY, R, angle - (WEDGE / steps), angle + 0.01);
+    ctx.closePath();
+    ctx.fillStyle = `rgba(0,255,136,${alpha})`;
+    ctx.fill();
+  }
+
+  // Leading edge bright line
+  ctx.beginPath();
+  ctx.moveTo(CX, CY);
+  ctx.lineTo(CX + R * Math.cos(sweepRad), CY + R * Math.sin(sweepRad));
+  ctx.strokeStyle = 'rgba(0,255,136,0.85)';
+  ctx.lineWidth   = 1.5;
+  ctx.shadowBlur  = 6;
+  ctx.shadowColor = '#00ff88';
+  ctx.stroke();
+  ctx.shadowBlur  = 0;
+}
+
+function drawAircraft() {
+  // Only draw aircraft within the radar circle and above minAlt
+  STATE.aircraft.forEach(ac => {
+    if (ac._distNm > STATE.radiusNm) return;
+    const alt = (typeof ac.alt_baro === 'number') ? ac.alt_baro : null;
+    if (alt !== null && alt < STATE.minAlt) return;
+
+    const { x, y } = polarToXY(ac._bearing, ac._distNm);
+    const col  = altColour(alt);
+    const sel  = STATE.selected === ac.hex;
+    const size = sel ? 8 : 6;
+    const track = (ac.track || 0) * Math.PI / 180;
+
+    // Light up trail at blip position
+    const trailKey = `${Math.round(ac._bearing)}-${ac.hex}`;
+    const sweepDiff = Math.abs(((STATE.sweepAngle - ac._bearing) + 360) % 360);
+    if (sweepDiff < 30) recordTrail(x, y, size * 0.8, trailKey);
+
+    // Plane chevron
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(track);
+    ctx.beginPath();
+    ctx.moveTo(0, -size);
+    ctx.lineTo(size * 0.55, size * 0.7);
+    ctx.lineTo(0, size * 0.35);
+    ctx.lineTo(-size * 0.55, size * 0.7);
+    ctx.closePath();
+    if (sel) {
+      ctx.fillStyle = '#ffdd44';
+      ctx.shadowBlur  = 10;
+      ctx.shadowColor = '#ffdd44';
+    } else {
+      ctx.fillStyle = col;
+      ctx.shadowBlur  = 4;
+      ctx.shadowColor = col;
+    }
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.restore();
+
+    // Callsign
+    const callsign = (ac.flight || ac.hex || '????').trim().substring(0, 8);
+    ctx.font = `${sel ? 11 : 10}px "Share Tech Mono", monospace`;
+    ctx.fillStyle = sel ? '#ffdd44' : col;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    let lx = x + size + 3;
+    let ly = y - size;
+    if (lx + 60 > CX + R) lx = x - size - 64;
+    ctx.fillText(callsign, lx, ly);
+
+    // Altitude tag
+    if (alt !== null) {
+      const fl = `FL${Math.round(alt / 100).toString().padStart(3,'0')}`;
+      ctx.fillStyle = sel ? '#ffdd88' : '#1a7a50';
+      ctx.font = '9px "Share Tech Mono", monospace';
+      ctx.fillText(fl, lx, ly + 12);
+    }
+  });
+}
+
+function drawHomeMarker() {
+  ctx.beginPath();
+  ctx.arc(CX, CY, 5, 0, Math.PI*2);
+  ctx.strokeStyle = '#00ff88';
+  ctx.lineWidth = 1.5;
+  ctx.shadowBlur  = 8;
+  ctx.shadowColor = '#00ff88';
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.beginPath();
+  ctx.arc(CX, CY, 2, 0, Math.PI*2);
+  ctx.fillStyle = '#00ff88';
+  ctx.fill();
+}
+
+// ─── Animation loop ───────────────────────────────────────────────────────────
+let lastTs = 0;
+function loop(ts) {
+  const dt = Math.min((ts - lastTs) / 1000, 0.1);
+  lastTs = ts;
+  STATE.sweepAngle = (STATE.sweepAngle + 45 * dt) % 360;
+  draw(dt);
+  updateClock();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// ─── Clock ────────────────────────────────────────────────────────────────────
+function updateClock() {
+  const now = new Date();
+  const hh  = String(now.getUTCHours()).padStart(2,'0');
+  const mm  = String(now.getUTCMinutes()).padStart(2,'0');
+  const ss  = String(now.getUTCSeconds()).padStart(2,'0');
+  document.getElementById('hdr-utc').textContent = `${hh}:${mm}:${ss} UTC`;
+}
+
+// ─── API fetch ────────────────────────────────────────────────────────────────
+async function fetchAircraft() {
+  if (STATE.demoMode) { injectDemoData(); return; }
+  if (!STATE.apiKey) return;
+
+  const url = `https://adsbexchange-com1.p.rapidapi.com/v2/lat/${STATE.lat}/lon/${STATE.lon}/dist/${STATE.radiusNm}/`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'x-rapidapi-key':  STATE.apiKey,
+        'x-rapidapi-host': 'adsbexchange-com1.p.rapidapi.com',
+      }
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    processAircraft(data.ac || []);
+    STATE.errorCount = 0;
+    setStatus(`${STATE.aircraft.length} aircraft`, 'status-ok');
+    document.getElementById('ft-poll').textContent = `Last: ${new Date().toLocaleTimeString()}`;
+  } catch (err) {
+    STATE.errorCount++;
+    setStatus(`Error: ${err.message}`, 'status-err');
+  }
+}
+
+function processAircraft(raw) {
+  const enriched = raw
+    .filter(ac => ac.lat != null && ac.lon != null)
+    .map(ac => ({
+      ...ac,
+      _distNm:  haversineNm(STATE.lat, STATE.lon, ac.lat, ac.lon),
+      _bearing: bearingDeg(STATE.lat, STATE.lon, ac.lat, ac.lon),
+    }))
+    .sort((a, b) => a._distNm - b._distNm);
+  STATE.aircraft = enriched;
+  renderList();
+  if (STATE.selected) renderDetail(STATE.aircraft.find(a => a.hex === STATE.selected));
+  document.getElementById('ac-count').textContent = `${enriched.length} aircraft`;
+  document.getElementById('ft-count').textContent = `Range: ${STATE.radiusNm}nm`;
+}
+
+function setStatus(msg, cls) {
+  const el = document.getElementById('ft-status');
+  el.textContent = msg;
+  el.className   = cls;
+}
+
+// ─── Sidebar list ─────────────────────────────────────────────────────────────
+function renderList() {
+  const list = document.getElementById('ac-list');
+  list.innerHTML = '';
+
+  const visible = STATE.aircraft.filter(ac => {
+    const alt = typeof ac.alt_baro === 'number' ? ac.alt_baro : null;
+    return ac._distNm <= STATE.radiusNm && (alt === null || alt >= STATE.minAlt);
+  });
+
+  if (visible.length === 0) {
+    list.innerHTML = '<div class="ac-item" style="color:var(--text-dim)">No aircraft in range</div>';
+    return;
+  }
+
+  visible.forEach(ac => {
+    const callsign = (ac.flight || ac.hex || '????').trim();
+    const alt      = typeof ac.alt_baro === 'number' ? `FL${Math.round(ac.alt_baro/100).toString().padStart(3,'0')}` : 'GND';
+    const spd      = ac.gs ? `${Math.round(ac.gs)}kt` : '—';
+    const dist     = `${ac._distNm.toFixed(1)}nm`;
+    const sel      = STATE.selected === ac.hex;
+
+    const div = document.createElement('div');
+    div.className = `ac-item${sel ? ' selected' : ''}`;
+    div.innerHTML = `
+      <div class="callsign">${callsign}</div>
+      <div class="ac-meta">
+        <span>${alt}</span>
+        <span>${spd}</span>
+        <span>${dist}</span>
+      </div>`;
+    div.addEventListener('click', () => selectAircraft(ac.hex));
+    list.appendChild(div);
+  });
+}
+
+function selectAircraft(hex) {
+  STATE.selected = STATE.selected === hex ? null : hex;
+  renderList();
+  renderDetail(STATE.aircraft.find(a => a.hex === hex));
+}
+
+function renderDetail(ac) {
+  const panel = document.getElementById('detail-panel');
+  if (!ac || STATE.selected !== ac.hex) {
+    panel.innerHTML = '<div class="dp-empty">Select an aircraft</div>';
+    return;
+  }
+  const callsign = (ac.flight || ac.hex || '????').trim();
+  const alt   = typeof ac.alt_baro === 'number' ? `FL${Math.round(ac.alt_baro/100).toString().padStart(3,'0')} (${ac.alt_baro.toLocaleString()}ft)` : 'On ground';
+  const spd   = ac.gs   ? `${Math.round(ac.gs)} kt` : '—';
+  const hdg   = ac.track ? `${Math.round(ac.track)}°` : '—';
+  const vr    = ac.baro_rate ? `${ac.baro_rate > 0 ? '+':''}${ac.baro_rate} fpm` : '—';
+  const dist  = `${ac._distNm.toFixed(1)} nm`;
+  const brng  = `${Math.round(ac._bearing)}°`;
+  const squawk = ac.squawk || '—';
+  const type  = ac.t || '—';
+
+  panel.innerHTML = `
+    <div class="dp-title">${callsign}</div>
+    <div class="dp-row"><span>Type</span><span>${type}</span></div>
+    <div class="dp-row"><span>Altitude</span><span>${alt}</span></div>
+    <div class="dp-row"><span>Speed</span><span>${spd}</span></div>
+    <div class="dp-row"><span>Heading</span><span>${hdg}</span></div>
+    <div class="dp-row"><span>Vert rate</span><span>${vr}</span></div>
+    <div class="dp-row"><span>Distance</span><span>${dist}</span></div>
+    <div class="dp-row"><span>Bearing</span><span>${brng}</span></div>
+    <div class="dp-row"><span>Squawk</span><span>${squawk}</span></div>
+  `;
+}
+
+// ─── Demo mode ────────────────────────────────────────────────────────────────
+function injectDemoData() {
+  const seed = [
+    { hex:'400615', flight:'BAW123 ', alt_baro:32000, gs:480, track:220, squawk:'1234', t:'B77W' },
+    { hex:'4007f1', flight:'EZY55KL', alt_baro:28000, gs:420, track:135, squawk:'2341', t:'A320' },
+    { hex:'4ca7b3', flight:'RYR7KQ ', alt_baro:15000, gs:380, track: 60, squawk:'3412', t:'B738' },
+    { hex:'3c4b27', flight:'DLH44B ', alt_baro:41000, gs:510, track:290, squawk:'4123', t:'A359' },
+    { hex:'4b1a20', flight:'KLM302 ', alt_baro: 8000, gs:290, track:350, squawk:'1432', t:'E190' },
+    { hex:'407c88', flight:'IBE21AH', alt_baro:37000, gs:490, track:185, squawk:'2143', t:'A333' },
+    { hex:'4cad20', flight:'AER831 ', alt_baro: 3500, gs:210, track: 95, squawk:'3214', t:'AT75' },
+    { hex:'43c3b1', flight:'TOM24V ', alt_baro:22000, gs:440, track:310, squawk:'4321', t:'B752' },
+  ];
+  // Drift positions slowly over time
+  const t = Date.now() / 1000;
+  const raw = seed.map((ac, i) => {
+    const phase = (t * 0.003 + i * 0.8) % (Math.PI * 2);
+    const r     = 0.1 + (i % 4) * 0.2;
+    return {
+      ...ac,
+      lat: STATE.lat + r * Math.sin(phase + i),
+      lon: STATE.lon + r * Math.cos(phase + i * 0.7),
+    };
+  });
+  processAircraft(raw);
+  setStatus(`DEMO MODE — ${raw.length} simulated aircraft`, 'status-warn');
+  document.getElementById('ft-poll').textContent = `Simulated`;
+}
+
+// ─── Controls ─────────────────────────────────────────────────────────────────
+document.getElementById('range-slider').addEventListener('input', function() {
+  STATE.radiusNm = parseInt(this.value);
+  document.getElementById('range-val').textContent = `${STATE.radiusNm} nm`;
+  document.getElementById('ft-count').textContent = `Range: ${STATE.radiusNm}nm`;
+  renderList();
+});
+
+document.getElementById('alt-slider').addEventListener('input', function() {
+  STATE.minAlt = parseInt(this.value);
+  const label  = STATE.minAlt === 0 ? 'ALL' : `${STATE.minAlt.toLocaleString()}ft`;
+  document.getElementById('alt-val').textContent = label;
+  renderList();
+});
+
+// Click on radar canvas to select nearest aircraft
+canvas.addEventListener('click', e => {
+  const rect = canvas.getBoundingClientRect();
+  const mx   = e.clientX - rect.left;
+  const my   = e.clientY - rect.top;
+  let best = null, bestDist = 20;
+  STATE.aircraft.forEach(ac => {
+    if (ac._distNm > STATE.radiusNm) return;
+    const { x, y } = polarToXY(ac._bearing, ac._distNm);
+    const d = Math.hypot(mx - x, my - y);
+    if (d < bestDist) { bestDist = d; best = ac; }
+  });
+  if (best) selectAircraft(best.hex);
+  else STATE.selected = null, renderDetail(null), renderList();
+});
+
+// ─── Config modal ─────────────────────────────────────────────────────────────
+function openConfig() {
+  document.getElementById('cfg-overlay').classList.add('open');
+  document.getElementById('cfg-key').value  = STATE.apiKey || '';
+  document.getElementById('cfg-lat').value  = STATE.lat;
+  document.getElementById('cfg-lon').value  = STATE.lon;
+  document.getElementById('cfg-poll').value = STATE.pollMs / 1000;
+}
+function closeConfig() {
+  document.getElementById('cfg-overlay').classList.remove('open');
+}
+
+document.getElementById('cfg-btn').addEventListener('click', openConfig);
+document.getElementById('cfg-cancel').addEventListener('click', closeConfig);
+
+document.getElementById('cfg-demo').addEventListener('click', () => {
+  STATE.demoMode = true;
+  STATE.apiKey   = '';
+  closeConfig();
+  startPolling();
+  setStatus('DEMO MODE', 'status-warn');
+  document.getElementById('hdr-coords').textContent =
+    `${STATE.lat.toFixed(4)}°N  ${Math.abs(STATE.lon).toFixed(4)}°W (demo)`;
+});
+
+document.getElementById('cfg-save').addEventListener('click', () => {
+  const key  = document.getElementById('cfg-key').value.trim();
+  const lat  = parseFloat(document.getElementById('cfg-lat').value);
+  const lon  = parseFloat(document.getElementById('cfg-lon').value);
+  const poll = parseInt(document.getElementById('cfg-poll').value);
+  if (!key) { alert('API key required'); return; }
+  if (isNaN(lat) || isNaN(lon)) { alert('Enter valid coordinates'); return; }
+  STATE.apiKey   = key;
+  STATE.lat      = lat;
+  STATE.lon      = lon;
+  STATE.pollMs   = Math.max(3000, poll * 1000);
+  STATE.demoMode = false;
+  document.getElementById('hdr-coords').textContent =
+    `${lat.toFixed(4)}°N  ${Math.abs(lon).toFixed(4)}°W`;
+  closeConfig();
+  startPolling();
+  setStatus('Connecting…', 'status-warn');
+});
+
+document.getElementById('cfg-overlay').addEventListener('click', e => {
+  if (e.target === document.getElementById('cfg-overlay')) closeConfig();
+});
+
+// ─── Polling ──────────────────────────────────────────────────────────────────
+function startPolling() {
+  if (STATE.pollTimer) clearInterval(STATE.pollTimer);
+  fetchAircraft();
+  STATE.pollTimer = setInterval(fetchAircraft, STATE.pollMs);
+}
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+// Show config on first load
+openConfig();
+document.getElementById('hdr-coords').textContent = '— configure to start —';
+</script>
+</body>
+</html>
