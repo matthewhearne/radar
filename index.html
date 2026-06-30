@@ -346,15 +346,17 @@
         <input type="range" id="range-slider" min="25" max="300" step="25" value="100">
         <span class="ctrl-val" id="range-val">100 nm</span>
       </div>
-      <div class="ctrl-row">
-        <label>Min altitude</label>
-        <input type="range" id="alt-slider" min="0" max="45000" step="1000" value="0">
-        <span class="ctrl-val" id="alt-val">ALL</span>
-      </div>
       <div class="ctrl-toggle">
         <span>Military only</span>
         <label class="toggle">
           <input type="checkbox" id="mil-toggle">
+          <span class="toggle-track"></span>
+        </label>
+      </div>
+      <div class="ctrl-toggle">
+        <span>Radar sweep</span>
+        <label class="toggle">
+          <input type="checkbox" id="sweep-toggle" checked>
           <span class="toggle-track"></span>
         </label>
       </div>
@@ -415,6 +417,7 @@ const STATE = {
   radiusNm:    100,
   minAlt:      0,
   milOnly:     false,
+  sweepOn:     true,
   aircraft:    [],
   selected:    null,
   sweepAngle:  0,
@@ -579,8 +582,8 @@ function draw(dt) {
   ctx.restore();
 
   drawCoastline();
-  drawPhosphorTrail();
-  drawSweep();
+  if (STATE.sweepOn) drawPhosphorTrail();
+  if (STATE.sweepOn) drawSweep();
   drawRingsAndGrid();
   drawTrack();
   drawAircraft();
@@ -706,7 +709,6 @@ function drawAircraft() {
     if (ac._distNm > STATE.radiusNm) return;
     if (STATE.milOnly && !ac._military) return;
     const alt = (typeof ac.alt_baro === 'number') ? ac.alt_baro : null;
-    if (alt !== null && alt < STATE.minAlt) return;
 
     const { x, y } = polarToXY(ac._bearing, ac._distNm);
     const isMil = ac._military;
@@ -1000,11 +1002,24 @@ function isMilitary(ac) {
   return MIL_HEX_PREFIXES.some(p => hex.startsWith(p));
 }
 
+// Pseudo-registrations used by ADSBexchange for ground stations and ATC surface targets.
+// These are not real aircraft and should be excluded from the display.
+const GROUND_STATION_REGS = new Set(['TWR', 'GND', 'APRON', 'ATIS', 'UNICOM', 'MULTICOM']);
+
+function isGroundStation(ac) {
+  const reg = (ac.r || '').trim().toUpperCase();
+  if (GROUND_STATION_REGS.has(reg)) return true;
+  // Also exclude TIS-B rebroadcast targets (hex starts with ~) — these are
+  // radar-derived surface tracks, not ADS-B equipped aircraft
+  if ((ac.hex || '').startsWith('~')) return true;
+  return false;
+}
+
 function processAircraft(raw) {
   const prevHexes = new Set(STATE.knownHexes);
 
   const enriched = raw
-    .filter(ac => ac.lat != null && ac.lon != null)
+    .filter(ac => ac.lat != null && ac.lon != null && !isGroundStation(ac))
     .map(ac => ({
       ...ac,
       _distNm:   haversineNm(STATE.lat, STATE.lon, ac.lat, ac.lon),
@@ -1068,11 +1083,9 @@ function renderList() {
   list.innerHTML = '';
 
   const visible = STATE.aircraft.filter(ac => {
-    const alt = typeof ac.alt_baro === 'number' ? ac.alt_baro : null;
-    const inRange  = ac._distNm <= STATE.radiusNm;
-    const aboveAlt = alt === null || alt >= STATE.minAlt;
-    const milPass  = !STATE.milOnly || ac._military;
-    return inRange && aboveAlt && milPass;
+    const inRange = ac._distNm <= STATE.radiusNm;
+    const milPass = !STATE.milOnly || ac._military;
+    return inRange && milPass;
   });
 
   if (visible.length === 0) {
@@ -1191,16 +1204,15 @@ document.getElementById('range-slider').addEventListener('input', function() {
   renderList();
 });
 
-document.getElementById('alt-slider').addEventListener('input', function() {
-  STATE.minAlt = parseInt(this.value);
-  const label  = STATE.minAlt === 0 ? 'ALL' : `${STATE.minAlt.toLocaleString()}ft`;
-  document.getElementById('alt-val').textContent = label;
-  renderList();
-});
-
 document.getElementById('mil-toggle').addEventListener('change', function() {
   STATE.milOnly = this.checked;
   renderList();
+});
+
+document.getElementById('sweep-toggle').addEventListener('change', function() {
+  STATE.sweepOn = this.checked;
+  // Clear phosphor trail immediately when sweep is turned off
+  if (!STATE.sweepOn) STATE.trail.clear();
 });
 
 // Click on radar canvas to select nearest aircraft
