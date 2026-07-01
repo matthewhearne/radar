@@ -985,19 +985,36 @@ function typeToName(code) {
   if (!code) return null;
   return ICAO_TYPE_NAMES[code.toUpperCase()] || null;
 }
-// ADSBexchange sets dbFlags bit 1 for military.
-// As a belt-and-braces fallback, also check squawk 7777 (mil intercept)
-// and common UK/NATO military ICAO hex prefixes.
+// ADSBexchange sets dbFlags bit 1 for military — this is the primary signal.
+// Hex prefix and squawk checks are belt-and-braces fallbacks only.
+// UK military ICAO hex blocks: 43c000-43ffff (RAF/RN/Army Air Corps)
+// US military ICAO hex block:  ae0000-aeffff (USAF, USN, USMC, etc.)
+// All other 'a' prefixes (a0–ad, af–ff) are US civil — do NOT flag these.
 const MIL_HEX_PREFIXES = [
-  '43c',  // UK RAF
+  '43c',  // UK RAF / Royal Navy
   '43e',  // UK RAF
   '43f',  // UK military
-  'ae',   // US military (starts with AE)
-  'a1',   // some US mil
+  'ae',   // US military (USAF, USN, USMC) — the only mil block in the 'a' range
 ];
+
+// Registrations that are unambiguously military callsigns/serials rather than
+// civil reg marks. UK military serials are 2 letters + 3 digits (e.g. ZZ416, ZH103).
+// N-numbers (US civil), G- (UK civil), EI- (Irish) etc. are never military.
+const CIVIL_REG_PREFIXES = ['G-', 'EI-', 'N', 'D-', 'F-', 'PH-', 'EC-', 'OE-',
+  'HB-', 'CS-', 'OO-', 'LX-', 'SE-', 'OH-', 'LN-', 'OY-', 'SP-', 'OK-', 'HA-'];
+
 function isMilitary(ac) {
+  // 1. Trust the ADSBexchange database flag above all else
   if (ac.dbFlags && (ac.dbFlags & 1)) return true;
+
+  // 2. If the registration is clearly a civil prefix, stop here — no false positives
+  const reg = (ac.r || '').trim().toUpperCase();
+  if (CIVIL_REG_PREFIXES.some(p => reg.startsWith(p))) return false;
+
+  // 3. Squawk 7777 is NATO military intercept
   if (ac.squawk === '7777') return true;
+
+  // 4. Hex prefix fallback — only well-defined military blocks
   const hex = (ac.hex || '').toLowerCase();
   return MIL_HEX_PREFIXES.some(p => hex.startsWith(p));
 }
